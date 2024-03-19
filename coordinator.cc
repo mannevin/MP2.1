@@ -91,10 +91,12 @@ class CoordServiceImpl final : public CoordService::Service {
             currZ->hostname = serverinfo->hostname();
             currZ->last_heartbeat = getTimeNow();
             currZ->port = serverinfo->port();
-            currZ->serverID = serverinfo->serverid();            
+            currZ->serverID = serverinfo->serverid();   
+            // push back new server in the cluster vector         
             clusters[clusterId].push_back(currZ);
             confirmation->set_status(false);
         } else {
+            // if cluster exists, set new time for last heartbeat on the server
             zNode * currZ = clusters[clusterId][clusters[clusterId].size()-1];
             currZ->last_heartbeat = getTimeNow();
             confirmation->set_status(true);
@@ -113,9 +115,11 @@ class CoordServiceImpl final : public CoordService::Service {
     // }
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         // Your code here
+        // calculate the cluster that the user should use based on the given formula
         int userId = id->id();
         int clusterId = ((userId - 1) % 3) + 1;
         int serverId = 1;
+        // assign the user to the last created server on the cluster if there exists a server and it is active
         log(INFO,"Assigning user " + std::to_string(userId) + " to cluster " + std::to_string(clusterId));
         if (clusters[clusterId].size() != 0 && clusters[clusterId][clusters[clusterId].size()-1]->isActive()) {
             serverinfo->set_serverid(serverId);
@@ -123,16 +127,19 @@ class CoordServiceImpl final : public CoordService::Service {
             serverinfo->set_hostname(clusters[clusterId][clusters[clusterId].size()-1]->hostname);
             serverinfo->set_port(clusters[clusterId][clusters[clusterId].size()-1]->port);
         } else {
+            // if there is no active server, return server unavailable
             return grpc::Status(grpc::StatusCode::UNAVAILABLE, "Server unavailable"); 
         }
         return Status::OK;
     }
+    // function to check if there exists a server that the client can call on their cluster
     Status exists(ServerContext* context, const ID* id, ServerInfo* serverinfo)  {
-        
-
+    
+        // find the cluster that the user belongs on
         int userId = id->id();
         int clusterId = ((userId - 1) % 3) + 1;
         int serverId = 1;
+        // check if the last created server on the cluster has sent a heartbeat recently, if so set to active
         log(INFO,"Checking if server " + std::to_string(serverId) + " on cluster " + std::to_string(clusterId) + " exists");
         if (clusters[clusterId].size() != 0 && difftime(getTimeNow(),clusters[clusterId][clusters[clusterId].size()-1]->last_heartbeat)<1) {
             serverinfo->set_active(true);

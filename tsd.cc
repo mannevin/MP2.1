@@ -267,18 +267,23 @@ class SNSServiceImpl final : public SNSService::Service {
 };
 void sendHeartbeat(std::shared_ptr<CoordService::Stub> stub_, std::string coordIp, std::string clusterId, std::string serverId, std::string port) {
   bool firstTime = true;
+  // infinite heartbeat loop
   while (true) {
     ClientContext sc;
     ServerInfo si;
     Confirmation c;
+    // fill out the server info parameter with the arguments
     si.set_clusterid(std::stoi(clusterId));
     si.set_serverid(std::stoi(serverId));
     si.set_port(port);
     si.set_hostname(coordIp);
+    // send heartbeats to the client via the stub every .5 seconds
     stub_->Heartbeat(&sc, si, &c);
+    // if this is the first heartbeat message, it should inialize the server and wait 5 seconds
     if (firstTime) {
       log(INFO, "Initializing server");
       sleep(5);
+      // if it is not the first message, it should send a heartbeat every .5 seconds
     } else {
       log(INFO, "Heartbeat sent to coordinator");
       sleep(0.5);
@@ -294,6 +299,7 @@ void sendHeartbeat(std::shared_ptr<CoordService::Stub> stub_, std::string coordI
 void RunServer(std::string clusterId, std::string serverId, std::string coordIp, std::string coordPort, std::string port) {
   std::string server_address = "0.0.0.0:"+port;
   SNSServiceImpl service;
+  // create a stub to the coordinator with the login information for the coordinator to communicate
   service.serverStub_ = CoordService::NewStub(grpc::CreateChannel(coordIp+":"+coordPort, grpc::InsecureChannelCredentials()));
 
   ServerBuilder builder;
@@ -303,6 +309,7 @@ void RunServer(std::string clusterId, std::string serverId, std::string coordIp,
   std::cout << "Server listening on " << server_address << std::endl;
   log(INFO, "Server listening on "+server_address);
   log(INFO, "Starting heartbeat thread");
+  // begin heartbeat thread
   std::thread heartbeatThread(sendHeartbeat, service.serverStub_, coordIp, clusterId, serverId, port);
   heartbeatThread.detach();
   server->Wait();

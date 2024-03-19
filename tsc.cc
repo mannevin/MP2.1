@@ -91,12 +91,14 @@ int Client::connectTo()
   // a member variable in your own Client class.
   // Please refer to gRpc tutorial how to create a stub.
   // ------------------------------------------------------------
+  // create a stub to the coordinator using the login credentials
   std::string login_info = coordIp + ":" + coordPort;
   stubCoord_ = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
             grpc::CreateChannel(
               login_info, grpc::InsecureChannelCredentials()
             )
   ));
+  // use the stub to find the cluster and server for the user to connect to
   ServerInfo serverInfo;
   ClientContext cc;
   ID id;
@@ -106,6 +108,7 @@ int Client::connectTo()
     // std::cout << "SERVER UNAVAILABLE" << std::endl;
     return -1;
   }
+  // get the hostname and port from the serverInfo object and use it to login to the stub to the server
   hostname = serverInfo.hostname();
   port = serverInfo.port();
   login_info = hostname + ":" + port;
@@ -172,7 +175,7 @@ IReply Client::processCommand(std::string& input)
   IReply ire;
   std::size_t index = input.find_first_of(" ");
   // std::cout << "Processing "+input + ". ";
-
+  // check if an active server exists to pass the command to, if there is, proceed, else return command failed
   ServerInfo serverInfo;
   ClientContext cc;
   ID id;
@@ -182,6 +185,7 @@ IReply Client::processCommand(std::string& input)
     ire.comm_status = FAILURE_INVALID;
     return ire;
   }
+  // if there is an active server, proceed
   if (serverInfo.active()) {
     if (index != std::string::npos) {
     std::string cmd = input.substr(0, index);
