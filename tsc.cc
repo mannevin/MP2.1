@@ -9,6 +9,8 @@
 #include "client.h"
 
 #include "sns.grpc.pb.h"
+#include "coordinator.grpc.pb.h"
+
 using grpc::Channel;
 using grpc::ClientContext;
 using grpc::ClientReader;
@@ -20,6 +22,10 @@ using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
+using csce438::CoordService;
+using csce438::ID;
+using csce438::ServerInfo;
+#define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 void sig_ignore(int sig) {
   std::cout << "Signal caught " + sig;
@@ -43,7 +49,7 @@ public:
   Client(const std::string& hname,
 	 const std::string& uname,
 	 const std::string& p)
-    :hostname(hname), username(uname), port(p) {}
+    :coordIp(hname), userId(uname), coordPort(p) {}
 
   
 protected:
@@ -52,14 +58,17 @@ protected:
   virtual void processTimeline();
 
 private:
+  std::string coordIp;
+  std::string userId;
+  std::string coordPort;
   std::string hostname;
-  std::string username;
   std::string port;
   
   // You can have an instance of the client stub
   // as a member variable.
   std::unique_ptr<SNSService::Stub> stub_;
-  
+  std::unique_ptr<CoordService::Stub> stubCoord_;
+
   IReply Login();
   IReply List();
   IReply Follow(const std::string &username);
@@ -82,16 +91,33 @@ int Client::connectTo()
   // a member variable in your own Client class.
   // Please refer to gRpc tutorial how to create a stub.
   // ------------------------------------------------------------
-  std::string login_info = hostname + ":" + port;
-    stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
-			       grpc::CreateChannel(
-			      login_info, grpc::InsecureChannelCredentials())));
-    
-    IReply ire = Login();
-    if(!ire.grpc_status.ok() || (ire.comm_status == FAILURE_ALREADY_EXISTS)) {
-      return -1;
-    }
-    return 1;
+  std::string login_info = coordIp + ":" + coordPort;
+  stubCoord_ = std::unique_ptr<CoordService::Stub>(CoordService::NewStub(
+            grpc::CreateChannel(
+              login_info, grpc::InsecureChannelCredentials()
+            )
+  ));
+  ServerInfo serverInfo;
+  ClientContext cc;
+  ID id;
+  id.set_id(std::atoi(userId.c_str()));
+  Status s = stubCoord_->GetServer(&cc, id, &serverInfo);
+  if (!s.ok()) {
+    // std::cout << "SERVER UNAVAILABLE" << std::endl;
+    return -1;
+  }
+  hostname = serverInfo.hostname();
+  port = serverInfo.port();
+  login_info = hostname + ":" + port;
+  // std::cout << login_info << std::endl;
+  stub_ = std::unique_ptr<SNSService::Stub>(SNSService::NewStub(
+            grpc::CreateChannel(
+          login_info, grpc::InsecureChannelCredentials())));
+  IReply ire = Login();
+  if(!ire.grpc_status.ok() || (ire.comm_status == FAILURE_ALREADY_EXISTS)) {
+    return -1;
+  }
+  return 1;
 }
 
 IReply Client::processCommand(std::string& input)
@@ -145,8 +171,19 @@ IReply Client::processCommand(std::string& input)
 
   IReply ire;
   std::size_t index = input.find_first_of(" ");
-  std::cout << "Processing "+input + ". ";
-  if (index != std::string::npos) {
+  // std::cout << "Processing "+input + ". ";
+
+  ServerInfo serverInfo;
+  ClientContext cc;
+  ID id;
+  id.set_id(std::atoi(userId.c_str()));
+  Status s = stubCoord_->exists(&cc, id, &serverInfo);
+  if (!s.ok()) {
+    ire.comm_status = FAILURE_INVALID;
+    return ire;
+  }
+  if (serverInfo.active()) {
+    if (index != std::string::npos) {
     std::string cmd = input.substr(0, index);
     
     /*
@@ -170,6 +207,10 @@ IReply Client::processCommand(std::string& input)
       return ire;
     }
   }
+  } else {
+    ire.comm_status = FAILURE_SERVER;
+    return ire;
+  }
   
   ire.comm_status = FAILURE_INVALID;
   return ire;
@@ -177,7 +218,7 @@ IReply Client::processCommand(std::string& input)
 
 void Client::processTimeline()
 {
-    Timeline(username);
+    Timeline(userId);
     // ------------------------------------------------------------
     // In this function, you are supposed to get into timeline mode.
     // You may need to call a service method to communicate with
@@ -206,7 +247,7 @@ void Client::processTimeline()
 IReply Client::List() {
     //Data being sent to the server
     Request request;
-    request.set_username(username);
+    request.set_username(userId);
 
     //Container for the data from the server
     ListReply list_reply;
@@ -236,13 +277,14 @@ IReply Client::List() {
         
 IReply Client::Follow(const std::string& username2) {
     Request request;
-    request.set_username(username);
+    request.set_username(userId);
     request.add_arguments(username2);
 
     Reply reply;
     ClientContext context;
 
     Status status = stub_->Follow(&context, request, &reply);
+    
     IReply ire; ire.grpc_status = status;
     if (reply.msg() == "unkown user name") {
         ire.comm_status = FAILURE_INVALID_USERNAME;
@@ -261,7 +303,7 @@ IReply Client::Follow(const std::string& username2) {
 IReply Client::UnFollow(const std::string& username2) {
     Request request;
 
-    request.set_username(username);
+    request.set_username(userId);
     request.add_arguments(username2);
 
     Reply reply;
@@ -286,7 +328,7 @@ IReply Client::UnFollow(const std::string& username2) {
 
 IReply Client::Login() {
     Request request;
-    request.set_username(username);
+    request.set_username(userId);
     Reply reply;
     ClientContext context;
 
@@ -294,7 +336,6 @@ IReply Client::Login() {
 
     IReply ire;
     ire.grpc_status = status;
-    std::cout << "REPLY MESSAGE: " + reply.msg();
     if (reply.msg() == "you have already joined") {
         ire.comm_status = FAILURE_ALREADY_EXISTS;
     } else {
@@ -344,19 +385,19 @@ void Client::Timeline(const std::string& username) {
 
 int main(int argc, char** argv) {
 
-  std::string hostname = "localhost";
-  std::string username = "default";
-  std::string port = "3010";
+  std::string ip = "127.0.0.1";
+  std::string port = "9090";
+  std::string userId = "1";
     
   int opt = 0;
-  while ((opt = getopt(argc, argv, "h:u:p:")) != -1){
+  while ((opt = getopt(argc, argv, "h:k:u:")) != -1){
     switch(opt) {
     case 'h':
-      hostname = optarg;break;
-    case 'u':
-      username = optarg;break;
-    case 'p':
+      ip = optarg;break;
+    case 'k':
       port = optarg;break;
+    case 'u':
+      userId = optarg;break;
     default:
       std::cout << "Invalid Command Line Argument\n";
     }
@@ -364,7 +405,7 @@ int main(int argc, char** argv) {
       
   std::cout << "Logging Initialized. Client starting...";
   
-  Client myc(hostname, username, port);
+  Client myc(ip, userId, port);
   
   //for(int i = 1; i <= 31; i++) 
   //  signal(i, sig_ignore);

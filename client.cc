@@ -96,6 +96,9 @@ void IClient::displayCommandReply(const std::string& comm, const IReply& reply) 
     case FAILURE_UNKNOWN:
       std::cout << "Command failed with unknown reason\n";
       break;
+    case FAILURE_SERVER:
+      std::cout << "Command failed\n";
+      break;
     default:
       std::cout << "Invalid status\n";
       break;

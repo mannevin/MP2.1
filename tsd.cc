@@ -37,6 +37,7 @@
 #include <google/protobuf/duration.pb.h>
 
 #include <fstream>
+#include <thread>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -48,6 +49,7 @@
 #define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 #include "sns.grpc.pb.h"
+#include "coordinator.grpc.pb.h"
 
 
 using google::protobuf::Timestamp;
@@ -64,6 +66,10 @@ using csce438::ListReply;
 using csce438::Request;
 using csce438::Reply;
 using csce438::SNSService;
+using csce438::CoordService;
+using csce438::ServerInfo;
+using csce438::Confirmation;
+using grpc::ClientContext;
 
 struct Client {
   std::string username;
@@ -92,7 +98,9 @@ int find_user(std::string username){
 }
 
 class SNSServiceImpl final : public SNSService::Service {
-  
+  public:
+    std::shared_ptr<CoordService::Stub> serverStub_;
+
   Status List(ServerContext* context, const Request* request, ListReply* list_reply) override {
     log(INFO,"Serving List Request from: " + request->username()  + "\n");
      
@@ -257,10 +265,36 @@ class SNSServiceImpl final : public SNSService::Service {
   }
 
 };
-
-void RunServer(std::string port_no) {
-  std::string server_address = "0.0.0.0:"+port_no;
+void sendHeartbeat(std::shared_ptr<CoordService::Stub> stub_, std::string coordIp, std::string clusterId, std::string serverId, std::string port) {
+  bool firstTime = true;
+  while (true) {
+    ClientContext sc;
+    ServerInfo si;
+    Confirmation c;
+    si.set_clusterid(std::stoi(clusterId));
+    si.set_serverid(std::stoi(serverId));
+    si.set_port(port);
+    si.set_hostname(coordIp);
+    stub_->Heartbeat(&sc, si, &c);
+    if (firstTime) {
+      log(INFO, "Initializing server");
+      sleep(5);
+    } else {
+      log(INFO, "Heartbeat sent to coordinator");
+      sleep(0.5);
+    }
+    firstTime = false;
+    // if (c.status() == false) {
+    //   // std::cout << "Created New Server" << std::endl;
+    // } else {
+    //   // std::cout << "Heartbeat Sent" << std::endl;
+    // }
+  }
+}
+void RunServer(std::string clusterId, std::string serverId, std::string coordIp, std::string coordPort, std::string port) {
+  std::string server_address = "0.0.0.0:"+port;
   SNSServiceImpl service;
+  service.serverStub_ = CoordService::NewStub(grpc::CreateChannel(coordIp+":"+coordPort, grpc::InsecureChannelCredentials()));
 
   ServerBuilder builder;
   builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
@@ -268,7 +302,9 @@ void RunServer(std::string port_no) {
   std::unique_ptr<Server> server(builder.BuildAndStart());
   std::cout << "Server listening on " << server_address << std::endl;
   log(INFO, "Server listening on "+server_address);
-
+  log(INFO, "Starting heartbeat thread");
+  std::thread heartbeatThread(sendHeartbeat, service.serverStub_, coordIp, clusterId, serverId, port);
+  heartbeatThread.detach();
   server->Wait();
 }
 
@@ -276,11 +312,23 @@ int main(int argc, char** argv) {
 
   
   
-  std::string port = "3010";
+  std::string clusterId = "1";
+  std::string serverId = "1";
+  std::string coordIp = "localhost";
+  std::string coordPort = "9090";
+  std::string port = "10000";
   
   int opt = 0;
-  while ((opt = getopt(argc, argv, "p:")) != -1){
+  while ((opt = getopt(argc, argv, "c:s:h:k:p:")) != -1){
     switch(opt) {
+      case 'c':
+          clusterId = optarg;break;
+      case 's':
+          serverId = optarg;break;
+      case 'h':
+          coordIp = optarg;break;
+      case 'k':
+          coordPort = optarg;break;
       case 'p':
           port = optarg;break;
       default:
@@ -291,7 +339,7 @@ int main(int argc, char** argv) {
   std::string log_file_name = std::string("server-") + port;
   google::InitGoogleLogging(log_file_name.c_str());
   log(INFO, "Logging Initialized. Server starting...");
-  RunServer(port);
+  RunServer(clusterId, serverId, coordIp, coordPort, port);
 
   return 0;
 }

@@ -14,8 +14,8 @@ service CoordService{
     // ZooKeeper API here
     // Create a path and place data in the znode
     rpc create (PathAndData) returns (Status) {}
-    // Check if a path exists (checking if a Master is elected
-    rpc exists (Path) returns (Status) {}
+    // Check if a path exists checking if a Master is elected
+    rpc exists (ID) returns (ServerInfo) {}
 }
 
 //server info message definition
@@ -24,6 +24,8 @@ message ServerInfo{
     string hostname = 2;
     string port = 3;
     string type = 4;
+    int32 clusterID = 5;
+    bool active = 6;
 }
 // TODO: check which extra stuff in the coordinator.proto you dont need
 

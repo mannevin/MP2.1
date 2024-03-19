@@ -23,6 +23,7 @@
 
 #include "coordinator.grpc.pb.h"
 #include "coordinator.pb.h"
+#include<glog/logging.h>
 
 using google::protobuf::Timestamp;
 using google::protobuf::Duration;
@@ -39,6 +40,7 @@ using csce438::Confirmation;
 using csce438::ID;
 using csce438::ServerList;
 using csce438::SynchService;
+#define log(severity, msg) LOG(severity) << msg; google::FlushLogFiles(google::severity); 
 
 struct zNode{
     int serverID;
@@ -59,7 +61,6 @@ std::vector<zNode*> cluster3;
 
 // creating a vector of vectors containing znodes
 std::vector<std::vector<zNode*>> clusters = {cluster1, cluster2, cluster3};
-
 
 //func declarations
 int findServer(std::vector<zNode*> v, int id); 
@@ -82,17 +83,64 @@ class CoordServiceImpl final : public CoordService::Service {
 
     Status Heartbeat(ServerContext* context, const ServerInfo* serverinfo, Confirmation* confirmation) override {
         // Your code here
+        int clusterId = serverinfo->clusterid();
+        log(INFO,"Received heartbeat from server " + std::to_string(serverinfo->serverid()) + " to cluster " + std::to_string(clusterId));
+        if (clusters[clusterId].size() == 0) {
+            // cluster does not exist, create a new znode
+            zNode * currZ = new zNode();
+            currZ->hostname = serverinfo->hostname();
+            currZ->last_heartbeat = getTimeNow();
+            currZ->port = serverinfo->port();
+            currZ->serverID = serverinfo->serverid();            
+            clusters[clusterId].push_back(currZ);
+            confirmation->set_status(false);
+        } else {
+            zNode * currZ = clusters[clusterId][clusters[clusterId].size()-1];
+            currZ->last_heartbeat = getTimeNow();
+            confirmation->set_status(true);
+        }
         return Status::OK;
     }
 
     //function returns the server information for requested client id
     //this function assumes there are always 3 clusters and has math
     //hardcoded to represent this.
+    // void printServerInfo(ServerInfo* serverInfo) {
+    //     std::cout << serverInfo->serverid() << std::endl;
+    //     std::cout << serverInfo->clusterid() << std::endl;
+    //     std::cout << serverInfo->hostname() << std::endl;
+    //     std::cout << serverInfo->port() << std::endl;
+    // }
     Status GetServer(ServerContext* context, const ID* id, ServerInfo* serverinfo) override {
         // Your code here
+        int userId = id->id();
+        int clusterId = ((userId - 1) % 3) + 1;
+        int serverId = 1;
+        log(INFO,"Assigning user " + std::to_string(userId) + " to cluster " + std::to_string(clusterId));
+        if (clusters[clusterId].size() != 0 && clusters[clusterId][clusters[clusterId].size()-1]->isActive()) {
+            serverinfo->set_serverid(serverId);
+            serverinfo->set_clusterid(clusterId);
+            serverinfo->set_hostname(clusters[clusterId][clusters[clusterId].size()-1]->hostname);
+            serverinfo->set_port(clusters[clusterId][clusters[clusterId].size()-1]->port);
+        } else {
+            return grpc::Status(grpc::StatusCode::UNAVAILABLE, "Server unavailable"); 
+        }
         return Status::OK;
     }
+    Status exists(ServerContext* context, const ID* id, ServerInfo* serverinfo)  {
+        
 
+        int userId = id->id();
+        int clusterId = ((userId - 1) % 3) + 1;
+        int serverId = 1;
+        log(INFO,"Checking if server " + std::to_string(serverId) + " on cluster " + std::to_string(clusterId) + " exists");
+        if (clusters[clusterId].size() != 0 && difftime(getTimeNow(),clusters[clusterId][clusters[clusterId].size()-1]->last_heartbeat)<1) {
+            serverinfo->set_active(true);
+        } else {
+            serverinfo->set_active(false);
+        }
+        return Status::OK;
+    }
 
 };
 
@@ -132,6 +180,9 @@ int main(int argc, char** argv) {
                 std::cerr << "Invalid Command Line Argument\n";
         }
     }
+    std::string log_file_name = std::string("coordinator-") + port;
+    google::InitGoogleLogging(log_file_name.c_str());
+    log(INFO, "Logging Initialized. Coordinator starting...");
     RunServer(port);
     return 0;
 }
@@ -150,6 +201,7 @@ void checkHeartbeat(){
         for (auto& c : clusters){
             for(auto& s : c){
                 if(difftime(getTimeNow(),s->last_heartbeat)>10){
+                    log(WARNING,"Missed heartbeat from server");
                     std::cout << "missed heartbeat from server " << s->serverID << std::endl;
                     if(!s->missed_heartbeat){
                         s->missed_heartbeat = true;
